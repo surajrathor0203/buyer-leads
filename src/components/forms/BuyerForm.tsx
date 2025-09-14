@@ -3,6 +3,9 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
+import { useFormValidation } from '@/hooks/useFormValidation';
+import { useDebounce } from '@/hooks/useDebounce';
+import { createBuyerSchema, updateBuyerSchema, PropertyTypeEnum, BuyerStatusEnum } from '@/lib/validation';
 
 type BuyerFormProps = {
   buyer?: any;
@@ -13,7 +16,11 @@ export default function BuyerForm({ buyer, isEditing = false }: BuyerFormProps) 
   const router = useRouter();
   const { user } = useAuth();
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState('');
+  const [serverError, setServerError] = useState('');
+  
+  // Use the appropriate schema based on whether we're editing or creating
+  const validationSchema = isEditing ? updateBuyerSchema : createBuyerSchema;
+  const { validateForm, validateField, getFieldError } = useFormValidation(validationSchema);
   
   const [formData, setFormData] = useState({
     name: '',
@@ -21,12 +28,15 @@ export default function BuyerForm({ buyer, isEditing = false }: BuyerFormProps) 
     phone: '',
     budget: '',
     location: '',
-    property_type: 'Residential',
+    property_type: 'Residential' as const,
     bedrooms: '',
     bathrooms: '',
     notes: '',
-    status: 'New'
+    status: 'New' as const
   });
+  
+  // Use debounce for form validation to avoid excessive validation during typing
+  const debouncedFormData = useDebounce(formData, 300);
 
   useEffect(() => {
     if (buyer) {
@@ -44,16 +54,37 @@ export default function BuyerForm({ buyer, isEditing = false }: BuyerFormProps) 
       });
     }
   }, [buyer]);
+  
+  // Perform field validation on debounced data change
+  useEffect(() => {
+    // Don't validate empty form on initial load
+    if (!debouncedFormData.name && !debouncedFormData.email) return;
+    
+    Object.keys(debouncedFormData).forEach(field => {
+      validateField(field, debouncedFormData[field as keyof typeof debouncedFormData]);
+    });
+  }, [debouncedFormData, validateField]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
+    
+    // Validate field on change - immediate feedback for select fields
+    if (e.target.tagName === 'SELECT') {
+      validateField(name, value);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Validate entire form before submission
+    if (!validateForm(formData)) {
+      return; // Don't submit if validation fails
+    }
+    
     setIsSubmitting(true);
-    setError('');
+    setServerError('');
 
     try {
       // Make sure user is authenticated
@@ -75,6 +106,11 @@ export default function BuyerForm({ buyer, isEditing = false }: BuyerFormProps) 
       const data = await response.json();
 
       if (!response.ok) {
+        // Handle validation errors from the server
+        if (response.status === 400 && data.details) {
+          throw new Error(data.error || 'Validation failed');
+        }
+        
         throw new Error(data.error || 'Failed to save buyer data');
       }
 
@@ -82,7 +118,7 @@ export default function BuyerForm({ buyer, isEditing = false }: BuyerFormProps) 
       router.push('/buyers');
       router.refresh();
     } catch (err: any) {
-      setError(err.message);
+      setServerError(err.message);
     } finally {
       setIsSubmitting(false);
     }
@@ -90,9 +126,9 @@ export default function BuyerForm({ buyer, isEditing = false }: BuyerFormProps) 
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
-      {error && (
+      {serverError && (
         <div className="bg-red-50 border-l-4 border-red-500 p-4 mb-4">
-          <p className="text-red-700">{error}</p>
+          <p className="text-red-700">{serverError}</p>
         </div>
       )}
 
@@ -108,8 +144,13 @@ export default function BuyerForm({ buyer, isEditing = false }: BuyerFormProps) 
             value={formData.name}
             onChange={handleChange}
             required
-            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+            className={`mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 ${
+              getFieldError('name') ? 'border-red-300' : ''
+            }`}
           />
+          {getFieldError('name') && (
+            <p className="mt-1 text-sm text-red-600">{getFieldError('name')}</p>
+          )}
         </div>
 
         <div>
@@ -123,8 +164,13 @@ export default function BuyerForm({ buyer, isEditing = false }: BuyerFormProps) 
             value={formData.email}
             onChange={handleChange}
             required
-            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+            className={`mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 ${
+              getFieldError('email') ? 'border-red-300' : ''
+            }`}
           />
+          {getFieldError('email') && (
+            <p className="mt-1 text-sm text-red-600">{getFieldError('email')}</p>
+          )}
         </div>
 
         <div>
@@ -137,8 +183,13 @@ export default function BuyerForm({ buyer, isEditing = false }: BuyerFormProps) 
             id="phone"
             value={formData.phone}
             onChange={handleChange}
-            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+            className={`mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 ${
+              getFieldError('phone') ? 'border-red-300' : ''
+            }`}
           />
+          {getFieldError('phone') && (
+            <p className="mt-1 text-sm text-red-600">{getFieldError('phone')}</p>
+          )}
         </div>
 
         <div>
@@ -151,8 +202,13 @@ export default function BuyerForm({ buyer, isEditing = false }: BuyerFormProps) 
             id="budget"
             value={formData.budget}
             onChange={handleChange}
-            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+            className={`mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 ${
+              getFieldError('budget') ? 'border-red-300' : ''
+            }`}
           />
+          {getFieldError('budget') && (
+            <p className="mt-1 text-sm text-red-600">{getFieldError('budget')}</p>
+          )}
         </div>
 
         <div>
@@ -165,8 +221,13 @@ export default function BuyerForm({ buyer, isEditing = false }: BuyerFormProps) 
             id="location"
             value={formData.location}
             onChange={handleChange}
-            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+            className={`mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 ${
+              getFieldError('location') ? 'border-red-300' : ''
+            }`}
           />
+          {getFieldError('location') && (
+            <p className="mt-1 text-sm text-red-600">{getFieldError('location')}</p>
+          )}
         </div>
 
         <div>
@@ -178,13 +239,17 @@ export default function BuyerForm({ buyer, isEditing = false }: BuyerFormProps) 
             id="property_type"
             value={formData.property_type}
             onChange={handleChange}
-            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+            className={`mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 ${
+              getFieldError('property_type') ? 'border-red-300' : ''
+            }`}
           >
-            <option value="Residential">Residential</option>
-            <option value="Commercial">Commercial</option>
-            <option value="Land">Land</option>
-            <option value="Industrial">Industrial</option>
+            {Object.values(PropertyTypeEnum.enum).map((type) => (
+              <option key={type} value={type}>{type}</option>
+            ))}
           </select>
+          {getFieldError('property_type') && (
+            <p className="mt-1 text-sm text-red-600">{getFieldError('property_type')}</p>
+          )}
         </div>
 
         <div>
@@ -198,8 +263,13 @@ export default function BuyerForm({ buyer, isEditing = false }: BuyerFormProps) 
             min="0"
             value={formData.bedrooms}
             onChange={handleChange}
-            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+            className={`mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 ${
+              getFieldError('bedrooms') ? 'border-red-300' : ''
+            }`}
           />
+          {getFieldError('bedrooms') && (
+            <p className="mt-1 text-sm text-red-600">{getFieldError('bedrooms')}</p>
+          )}
         </div>
 
         <div>
@@ -214,8 +284,13 @@ export default function BuyerForm({ buyer, isEditing = false }: BuyerFormProps) 
             step="0.5"
             value={formData.bathrooms}
             onChange={handleChange}
-            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+            className={`mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 ${
+              getFieldError('bathrooms') ? 'border-red-300' : ''
+            }`}
           />
+          {getFieldError('bathrooms') && (
+            <p className="mt-1 text-sm text-red-600">{getFieldError('bathrooms')}</p>
+          )}
         </div>
 
         <div className="md:col-span-2">
@@ -227,15 +302,17 @@ export default function BuyerForm({ buyer, isEditing = false }: BuyerFormProps) 
             id="status"
             value={formData.status}
             onChange={handleChange}
-            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+            className={`mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 ${
+              getFieldError('status') ? 'border-red-300' : ''
+            }`}
           >
-            <option value="New">New</option>
-            <option value="Contacted">Contacted</option>
-            <option value="Viewing Scheduled">Viewing Scheduled</option>
-            <option value="Offer Made">Offer Made</option>
-            <option value="Closed">Closed</option>
-            <option value="Lost">Lost</option>
+            {Object.values(BuyerStatusEnum.enum).map((status) => (
+              <option key={status} value={status}>{status}</option>
+            ))}
           </select>
+          {getFieldError('status') && (
+            <p className="mt-1 text-sm text-red-600">{getFieldError('status')}</p>
+          )}
         </div>
 
         <div className="md:col-span-2">
@@ -248,8 +325,13 @@ export default function BuyerForm({ buyer, isEditing = false }: BuyerFormProps) 
             rows={4}
             value={formData.notes}
             onChange={handleChange}
-            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+            className={`mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 ${
+              getFieldError('notes') ? 'border-red-300' : ''
+            }`}
           />
+          {getFieldError('notes') && (
+            <p className="mt-1 text-sm text-red-600">{getFieldError('notes')}</p>
+          )}
         </div>
       </div>
 
